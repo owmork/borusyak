@@ -34,12 +34,12 @@ devtools::install_github("kylebutts/didimputation")
 I will load example data from the package and plot the average outcome among the groups. Here is one unit's data:
 
 ```{r load-data, code_folding=TRUE,}
-library(didimputation)
+library(borusyak)
 library(fixest)
 library(ggplot2)
 
 # Load Data from did2s package
-data("df_het", package = "didimputation")
+data("df_het", package = "borusyak")
 setDT(df_het)
 ```
 

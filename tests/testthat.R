@@ -1,4 +1,4 @@
 library(testthat)
-library(didimputation)
+library(borusyak)
 
-test_check("didimputation")
+test_check("borusyak")

@@ -79,7 +79,7 @@ form average treatment effects for groups of {it}.
 Load example dataset which has two treatment groups and homogeneous treatment effects
 
 \if{html}{\out{<div class="sourceCode r">}}\preformatted{# Load Example Dataset
-data("df_hom", package="didimputation")
+data("df_hom", package="borusyak")
 }\if{html}{\out{</div>}}
 \subsection{Static TWFE}{
 

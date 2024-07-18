@@ -55,7 +55,7 @@
 #'
 #' ```{r, comment = "#>", collapse = TRUE}
 #' # Load Example Dataset
-#' data("df_hom", package="didimputation")
+#' data("df_hom", package="borusyak")
 #' ```
 #' ### Static TWFE
 #'

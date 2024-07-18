@@ -4,7 +4,7 @@
 library(fixest)
 library(data.table)
 
-data(df_hom, package = "didimputation")
+data(df_hom, package = "borusyak")
 data = df_hom
 data$y2 = data$dep_var + rnorm(nrow(data), 0, 1)
 yname = "c(dep_var, y2)"
@@ -61,7 +61,7 @@ pretrends = NULL; cluster_var = NULL
 #   first_stage =  first_stage, horizon = 0:5, pretrends = -5:-2
 # )
 
-# data(df_hom, package = "didimputation")
+# data(df_hom, package = "borusyak")
 # data = df_hom
 # yname = "dep_var"; idname = "unit"; gname = "g"; tname = "year"
 # first_stage = ~ error | unit + year; 
