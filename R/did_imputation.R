@@ -86,305 +86,386 @@
 #'               tname = "year", idname = "sid")
 #' ```
 #'
-did_imputation <- function(data, yname, gname, tname, idname, 
-  first_stage = NULL, wname = NULL, wtr = NULL, horizon = NULL,
-  pretrends = NULL, cluster_var = NULL) {
+did_imputation <- function(data, yname, gname, tname, idname, etname = NULL,
+						   first_stage = NULL, wname = NULL, wtr = NULL, horizon = NULL,
+						   pretrends = NULL, cluster_var = NULL, cov = FALSE) {
 
-  # CRAN Errors
-  zz000treat = zz000event_time = zz000weight = zz000adj = zz000treat = NULL
+	# CRAN Errors
+	zz000treat = zz000event_time = zz000weight = zz000adj = zz000treat = NULL
 
-  # Set-up Parameters ----------------------------------------------------------
+	# Set-up Parameters ----------------------------------------------------------
 
-  # Extract first stage vars from formula
-  if (is.null(first_stage)) {
-    first_stage <- paste0("0 | ", idname, " + ", tname)
-  } else if (inherits(first_stage, "formula")) {
-    first_stage <- as.character(first_stage)[[2]]
-  }
+	# Extract first stage vars from formula
+	if (is.null(first_stage)) {
+		first_stage <- paste0("0 | ", idname, " + ", tname)
+	} else if (inherits(first_stage, "formula")) {
+		first_stage <- as.character(first_stage)[[2]]
+	}
 
-  # Formula for fitting the first stage
-  formula <- stats::as.formula(paste0(yname, " ~ ", first_stage))
+	# Formula for fitting the first stage
+	formula <- stats::as.formula(paste0(yname, " ~ ", first_stage))
 
-  # make local copy of data, convert to data.table
-  data <- copy(data) |> setDT()
+	# make local copy of data, convert to data.table
+	data <- copy(data) |> setDT()
 
-  # Treatment indicator
-  data$zz000treat = 1 * (data[[tname]] >= data[[gname]]) * (data[[gname]] > 0)
+	# Treatment indicator
+	data$zz000treat = 1 * (data[[tname]] >= data[[gname]]) * (data[[gname]] > 0)
 
-  # if g is NA
-  data[is.na(zz000treat), zz000treat := 0]
+	# if g is NA
+	data[is.na(zz000treat), zz000treat := 0]
 
-  # Create event time
-  data$zz000event_time = ifelse(
-    is.na(data[[gname]]) | data[[gname]] == 0 | data[[gname]] == Inf,
-    -Inf,
-    as.numeric(data[[tname]] - data[[gname]])
-  )
+	# Create event time
+	if (!is.null(etname)) {
+		data$zz000event_time = data[[etname]]
+	} else {
+		data$zz000event_time = ifelse(
+			is.na(data[[gname]]) | data[[gname]] == 0 | data[[gname]] == Inf,
+			-Inf,
+			as.numeric(data[[tname]] - data[[gname]])
+		)
+	}
 
-  # Get list of event_time
-  event_time <- data[is.finite(zz000event_time), unique(zz000event_time)]
+	# Get list of event_time
+	event_time <- data[is.finite(zz000event_time), unique(zz000event_time)]
 
-  # horizon/allhorizon options
-  if (is.null(wtr)) {
+	# horizon/allhorizon options
+	if (is.null(wtr)) {
 
-    # event-study
-    if (!is.null(horizon)) {
-      # create event time weights
+		# event-study
+		if (!is.null(horizon)) {
+			# create event time weights
 
-      # allhorizons
-      if (all(horizon == TRUE)) horizon <- event_time
+			# allhorizons
+			if (all(horizon == TRUE)) horizon <- event_time
 
-      # Create wtr of horizons
-      wtr <- paste0("zz000wtr", horizon[horizon >= 0])
+			# Create wtr of horizons
+			wtr <- paste0("zz000wtr", horizon[horizon >= 0])
 
-      for(e in horizon[horizon >= 0]) {
-        data[,
-          paste0("zz000wtr", e) := 
-            ifelse(is.na(zz000event_time), 0, 1 * (zz000event_time == e)),
-          env = list(e = e)
-        ]
-      }
-    } else {
-      wtr <- "zz000wtrtreat"
-      data[, (wtr) := 1 * (zz000treat == 1)]
-    }
-  }
+			for(e in horizon[horizon >= 0]) {
+				data[,
+					 paste0("zz000wtr", e) :=
+					 	ifelse(is.na(zz000event_time), 0, 1 * (zz000event_time == e)),
+					 env = list(e = e)
+				]
+			}
+		} else {
+			wtr <- "zz000wtrtreat"
+			data[, (wtr) := 1 * (zz000treat == 1)]
+		}
+	}
 
-  # Weights specified or not
-  if (is.null(wname)) {
-    data$zz000weight = 1
-  } else {
-    data$zz000weight = data[[wname]]
-  }
+	# Weights specified or not
+	if (is.null(wname)) {
+		data$zz000weight = 1
+	} else {
+		data$zz000weight = data[[wname]]
+	}
 
-  # First Stage estimate -------------------------------------------------------
+	# First Stage estimate -------------------------------------------------------
 
-  # Estimate Y(0) using untreated observations
-  first_stage_est <- fixest::feols(
-    formula,
-    se = "standard",
-    data[zz000treat == 0, ],
-    weights = ~zz000weight,
-    warn = FALSE, notes = FALSE
-  )
+	# Estimate Y(0) using untreated observations
+	first_stage_est <- fixest::feols(
+		formula,
+		se = "standard",
+		data[zz000treat == 0, ],
+		weights = ~zz000weight,
+		warn = FALSE,
+		notes = FALSE,
+		combine.quick = FALSE
+	)
 
-  if(inherits(first_stage_est, "fixest_multi")) {
-    yvars = lapply(first_stage_est, \(est) est$model_info$lhs) |> unlist()
-  } else {
-    yvars = as.character(stats::terms(formula)[1][[2]])
-  }
-  names(yvars) = yvars
+	if(inherits(first_stage_est, "fixest_multi")) {
+		yvars = lapply(first_stage_est, \(est) est$model_info$lhs) |> unlist()
+	} else {
+		yvars = as.character(stats::terms(formula)[1][[2]])
+	}
+	names(yvars) = yvars
 
-  # Residualize outcome variable(s)
-  if (length(yvars) == 1) {
-    data[[paste0("zz000adj_", yvars)]] = 
-      data[[yvars]] - stats::predict(first_stage_est, newdata = data)
-  } else {
-    for(est in first_stage_est) {
-      yvar = est$model_info$lhs
-      data[[paste0("zz000adj_", yvar)]] = 
-        data[[yvar]] - stats::predict(est, newdata = data)
-    }
-  }
+	# Residualize outcome variable(s)
+	if (length(yvars) == 1) {
+		data[[paste0("zz000adj_", yvars)]] =
+			data[[yvars]] - stats::predict(first_stage_est, newdata = data)
+	} else {
+		for(est in first_stage_est) {
+			yvar = est$model_info$lhs
+			data[[paste0("zz000adj_", yvar)]] =
+				data[[yvar]] - stats::predict(est, newdata = data)
+		}
+	}
 
-  # drop anything with missing values of the residualized outcome
-  todrop <- apply(
-    is.na(data[, paste("zz000adj", yvars, sep = "_"), with = F]),
-    MARGIN = 1,
-    FUN = any
-  )
-  data <- data[!todrop, ]
-
-
-  # Multiply treatment weights * weights vector
-  data[, (wtr) := lapply(.SD, function(x) x * zz000weight), .SDcols = wtr] 
-  data[is.na(zz000weight), (wtr) := 0]
-  # Normalize
-  data[, (wtr) := lapply(.SD, function(x) x / sum(x)), .SDcols = wtr] 
-
-
-  # Point estimate for wtr
-  ests = lapply(yvars, function(yvar) {
-    data$zz000adj = data[[paste0("zz000adj_", yvar)]]
-    data[
-      data$zz000treat == 1,
-      lapply(.SD, function(x) sum(x * zz000adj)),
-      .SDcols = wtr
-    ]
-  }) |> 
-    data.table::rbindlist(idcol = "lhs")
+	# drop anything with missing values of the residualized outcome
+	todrop <- apply(
+		is.na(data[, paste("zz000adj", yvars, sep = "_"), with = F]),
+		MARGIN = 1,
+		FUN = any
+	)
+	data <- data[!todrop, ]
 
 
-  # Standard Errors ------------------------------------------------------------
-  if (length(yvars) == 1) {
-    Z <- did2s_sparse(data, first_stage_est)
-  } else {
-    Z <- did2s_sparse(data, first_stage_est[[1]])
-  }
-
-  # Equation (6) of Borusyak et. al. 2021
-  # - Z (Z_0' Z_0)^{-1} Z_1' wtr_1
-  Z = Z * data$zz000weight
-  wtr_mat =  Matrix::Matrix(
-    as.matrix(data[data$zz000treat == 1, wtr, with = F]),
-    sparse = TRUE
-  )
-    
-  Z1 = copy(Z)
-  Z1 = Z1[which(data$zz000treat == 1),]
-  
-  Z0 = copy(Z)
-  Z0 = Z0[which(data$zz000treat == 0),]
-
-  Z1_wtr = Matrix::crossprod(Z1, wtr_mat)
-  S_Z0Z0 = Matrix::crossprod(Z0)
-
-  v_star <- -1 * Z %*% Matrix::solve(S_Z0Z0, Z1_wtr)
-
-  # fix v_it^* = w for treated observations
-  v_star[data$zz000treat == 1, ] <- 
-    as.matrix(data[data$zz000treat == 1, wtr, with = F])
-
-  # If no cluster_var, then use idname
-  if (is.null(cluster_var)) cluster_var <- idname
-
-  ses <- lapply(yvars, function(yvar) {
-      data$zz000adj = data[[paste0("zz000adj_", yvar)]]
-      se_inner(data, v_star, wtr, cluster_var, gname)
-    }) |>
-    rbindlist(idcol = "lhs")
+	# Multiply treatment weights * weights vector
+	data[, (wtr) := lapply(.SD, function(x) x * zz000weight), .SDcols = wtr]
+	data[is.na(zz000weight), (wtr) := 0]
+	# Normalize
+	data[, (wtr) := lapply(.SD, function(x) x / sum(x)), .SDcols = wtr]
 
 
-  # Pre-event Estimates --------------------------------------------------------
-
-  if (!is.null(pretrends) & !all(pretrends == FALSE)) {
-    if (all(pretrends == TRUE)) {
-      pre_formula <- stats::as.formula(
-        paste0(yname, " ~ i(zz000event_time) + ", first_stage)
-      )
-    } else {
-      if (all(pretrends %in% event_time)) {
-        pre_formula <- stats::as.formula(
-          paste0(
-            yname, 
-            " ~ i(zz000event_time, keep = c(", 
-            paste(pretrends, collapse = ', '), 
-            ")) + ", 
-            first_stage
-          )
-        )
-      } else {
-        stop(paste0("Pretrends not found in event_time. Event_time has values", event_time))
-      }
-    }
-
-    pre_est <- fixest::feols(
-      pre_formula, data[data$zz000treat == 0, ], cluster = cluster_var,
-      weights = ~zz000weight, warn = FALSE, notes = FALSE
-    )
-  }
+	# Point estimate for wtr
+	ests = lapply(yvars, function(yvar) {
+		data$zz000adj = data[[paste0("zz000adj_", yvar)]]
+		data[
+			data$zz000treat == 1,
+			lapply(.SD, function(x) sum(x * zz000adj)),
+			.SDcols = wtr
+		]
+	}) |>
+		data.table::rbindlist(idcol = "lhs")
 
 
-  # Create dataframe of results in tidy format ---------------------------------
-  ests <- data.table::melt(
-    ests,
-    id.vars = "lhs", variable.name = "term", value.name = "estimate"
-  )
-  ses <- data.table::melt(
-    ses,
-    id.vars = "lhs", variable.name = "term", value.name = "std.error"
-  )
+	# Standard Errors ------------------------------------------------------------
+	if (length(yvars) == 1) {
+		Z <- did2s_sparse(data, first_stage_est)
+	} else {
+		Z <- did2s_sparse(data, first_stage_est[[1]])
+	}
 
-  out <- merge(ests, ses, by = c("lhs", "term"))
-  
-  out$term = gsub("zz000wtr", "", out$term)
-  out$conf.low = out$estimate - 1.96 * out$std.error
-  out$conf.high = out$estimate + 1.96 * out$std.error
+	# Equation (6) of Borusyak et. al. 2021
+	# - Z (Z_0' Z_0)^{-1} Z_1' wtr_1
+	Z = Z * data$zz000weight
+	wtr_mat =  Matrix::Matrix(
+		as.matrix(data[data$zz000treat == 1, wtr, with = F]),
+		sparse = TRUE
+	)
 
-  if (!is.null(pretrends) & !all(pretrends == FALSE)) {
-    if (length(yvars) == 1) {
-      pre_out = pre_est$coeftable
-      pre_out$term = names(pre_est$coefficients)
-      pre_out$lhs <- yvars
-      setDT(pre_out)
-      setnames(pre_out, c("estimate", "std.error", "t_value", "p_value", "term", "lhs"))
-    } else {
-      pre_out = lapply(pre_est, function(est) {
-        out = est$coeftable
-        out$term = names(est$coefficients)
-        setDT(out)
-      })
-      names(pre_out) = yvars
-      pre_out = rbindlist(pre_out, idcol = "lhs")
-      setnames(pre_out, c("lhs", "estimate", "std.error", "t_value", "p_value", "term"))
-    }
+	Z1 = copy(Z)
+	Z1 = Z1[which(data$zz000treat == 1),]
 
-    pre_out = pre_out[grep("zz000event_time", pre_out$term), ]
-    pre_out$term = gsub("zz000event_time::", "", pre_out$term)
-    pre_out$conf.low  = pre_out$estimate - 1.96 * pre_out$std.error
-    pre_out$conf.high = pre_out$estimate + 1.96 * pre_out$std.error
+	Z0 = copy(Z)
+	Z0 = Z0[which(data$zz000treat == 0),]
 
-    pre_out <- pre_out[, c("lhs", "term", "estimate", "std.error", "conf.low", "conf.high")]
+	Z1_wtr = Matrix::crossprod(Z1, wtr_mat)
+	S_Z0Z0 = Matrix::crossprod(Z0)
 
-    out <- rbind(pre_out, out)
-  }
- 
-  if(all(wtr != "zz000wtrtreat")) {
-    out = out[order(out$lhs, as.numeric(out$term)), ]
-  }
+	v_star <- -1 * Z %*% Matrix::solve(S_Z0Z0, Z1_wtr)
 
-  if(length(yvars) == 1) out$lhs = NULL
+	# fix v_it^* = w for treated observations
+	v_star[data$zz000treat == 1, ] <-
+		as.matrix(data[data$zz000treat == 1, wtr, with = F])
 
-  return(out)
+	# If no cluster_var, then use idname
+	if (is.null(cluster_var)) cluster_var <- idname
+
+	ses <- lapply(yvars, function(yvar) {
+		data$zz000adj = data[[paste0("zz000adj_", yvar)]]
+		se_inner(data, v_star, wtr, cluster_var, gname)
+	}) |>
+		rbindlist(idcol = "lhs")
+
+	# Full covariance of coefficients # ADD OLI
+	cov_mat <- if (cov) {
+		data$zz000adj = data[[paste0("zz000adj_", yvars[[1]])]] # ADDED OLI
+		covariance_matrix(data, v_star, wtr, cluster_var, gname)
+	} else {
+		NULL
+	}
+
+	# Pre-event Estimates --------------------------------------------------------
+
+	if (!is.null(pretrends) & !all(pretrends == FALSE)) {
+		if (all(pretrends == TRUE)) {
+			pre_formula <- stats::as.formula(
+				paste0(yname, " ~ i(zz000event_time) + ", first_stage)
+			)
+		} else if (inherits(pretrends, "formula")) {
+			pretrends <- as.character(pretrends)[[2]]
+			pre_formula <- stats::as.formula(
+				paste0(
+					yname,
+					"~",
+					pretrends,
+					" + ",
+					first_stage
+				)
+			)
+		} else {
+			if (all(pretrends %in% event_time)) {
+				pre_formula <- stats::as.formula(
+					paste0(
+						yname,
+						" ~ i(zz000event_time, keep = c(",
+						paste(pretrends, collapse = ', '),
+						")) + ",
+						first_stage
+					)
+				)
+			} else {
+				stop(paste0("Pretrends not found in event_time. Event_time has values", event_time))
+			}
+		}
+
+		pre_est <- fixest::feols(
+			pre_formula, data[data$zz000treat == 0, ], cluster = cluster_var,
+			weights = ~zz000weight, warn = FALSE, notes = FALSE
+		)
+	}
+
+
+	# Create dataframe of results in tidy format ---------------------------------
+	ests <- data.table::melt(
+		ests,
+		id.vars = "lhs", variable.name = "term", value.name = "estimate"
+	)
+	ses <- data.table::melt(
+		ses,
+		id.vars = "lhs", variable.name = "term", value.name = "std.error"
+	)
+
+	out <- merge(ests, ses, by = c("lhs", "term"))
+
+	out$term = gsub("zz000wtr", "", out$term)
+	out$conf.low = out$estimate - 1.96 * out$std.error
+	out$conf.high = out$estimate + 1.96 * out$std.error
+
+	if (!is.null(pretrends) & !all(pretrends == FALSE)) {
+		if (length(yvars) == 1) {
+			pre_out = as.data.frame(pre_est$coeftable) # CHANGE OLI
+			pre_out$term = names(pre_est$coefficients)
+			pre_out$lhs <- yvars
+			setDT(pre_out)
+			setnames(pre_out, c("estimate", "std.error", "t_value", "p_value", "term", "lhs"))
+		} else {
+			pre_out = lapply(pre_est, function(est) {
+				out = as.data.frame(est$coeftable) # CHANGE OLI
+				out$term = names(est$coefficients)
+				setDT(out)
+			})
+			names(pre_out) = yvars
+			pre_out = rbindlist(pre_out, idcol = "lhs")
+			setnames(pre_out, c("lhs", "estimate", "std.error", "t_value", "p_value", "term"))
+		}
+
+		pre_out = pre_out[grep("zz000event_time", pre_out$term), ]
+		pre_out$term = gsub("zz000event_time::", "", pre_out$term)
+		pre_out$conf.low  = pre_out$estimate - 1.96 * pre_out$std.error
+		pre_out$conf.high = pre_out$estimate + 1.96 * pre_out$std.error
+
+		pre_out <- pre_out[, c("lhs", "term", "estimate", "std.error", "conf.low", "conf.high")]
+
+		out <- rbind(pre_out, out)
+	}
+
+	if(all(wtr != "zz000wtrtreat")) {
+		#out = out[order(out$lhs, as.numeric(out$term)), ] # CHANGE OLI
+	}
+
+	if(length(yvars) == 1) out$lhs = NULL
+
+	return(list(coeftable = out, cov = cov_mat))
 }
 
 
 se_inner <- function(data, v_star, wtr, cluster_var, gname) {
-  # CRAN Errors
-  zz000adj = zz000treat = NULL
+	# CRAN Errors
+	zz000adj = zz000treat = NULL
 
-  vcols <- paste0("zz000v", seq_along(wtr))
-  tcols <- paste0("zz000tau_et", seq_along(wtr))
-  
-  # Calculate v_it^* = - Z (Z_0' Z_0)^{-1} Z_1' * w_1
-  for (i in seq_along(vcols)) {
-    data[, vcols[i] := v_star[, i]]
-  }
+	vcols <- paste0("zz000v", seq_along(wtr))
+	tcols <- paste0("zz000tau_et", seq_along(wtr))
 
-  # Equation (10) of Borusyak et. al. 2021
-  # Calculate tau_it - \bar{\tau}_{et}
-  data[,
-    (tcols) := lapply(.SD, function(x) {
-      sum(x^2 * zz000adj) / sum(x^2) * zz000treat
-    }),
-    by = c(gname, "zz000event_time"),
-    .SDcols = vcols
-  ]
+	# Calculate v_it^* = - Z (Z_0' Z_0)^{-1} Z_1' * w_1
+	for (i in seq_along(vcols)) {
+		data[, vcols[i] := v_star[, i]]
+	}
 
-  # Recenter tau by \bar{\tau}_{et}
-  data[, 
-    (tcols) := lapply(.SD, function(x) {
-      x[is.na(x)] = 0
-      zz000adj - x
-    }), 
-    .SDcols = tcols
-  ]
+	# Equation (10) of Borusyak et. al. 2021
+	# Calculate tau_it - \bar{\tau}_{et}
+	data[,
+		 (tcols) := lapply(.SD, function(x) {
+		 	sum(x^2 * zz000adj) / sum(x^2) * zz000treat
+		 }),
+		 by = c(gname, "zz000event_time"),
+		 .SDcols = vcols
+	]
 
-  # Equation (8)
-  # Calculate variance of estimate
-  result <- data[, 
-    lapply(seq_along(vcols), function(idx) {
-      sum(.SD[[vcols[idx]]] * .SD[[tcols[idx]]])^2
-    }),
-    by = cluster_var
-  ][, 
-    lapply(.SD, function(x) sqrt(sum(x))),
-    .SDcols = paste0("V", seq_along(wtr))
-  ] 
-  
-  result = setnames(result, wtr)
+	# Recenter tau by \bar{\tau}_{et}
+	data[,
+		 (tcols) := lapply(.SD, function(x) {
+		 	x[is.na(x)] = 0
+		 	zz000adj - x
+		 }),
+		 .SDcols = tcols
+	]
 
-  data[, c(vcols, tcols) := NULL]
+	# Equation (8)
+	# Calculate variance of estimate
+	result <- data[,
+				   lapply(seq_along(vcols), function(idx) {
+				   	sum(.SD[[vcols[idx]]] * .SD[[tcols[idx]]])^2
+				   }),
+				   by = cluster_var
+	][,
+	  lapply(.SD, function(x) sqrt(sum(x))),
+	  .SDcols = paste0("V", seq_along(wtr))
+	]
 
-  return(result)
+	result = setnames(result, wtr)
+
+	data[, c(vcols, tcols) := NULL]
+
+	return(result)
+}
+
+
+# ADDED OLI
+covariance_matrix <- function(data, v_star, wtr, cluster_var, gname) {
+	# CRAN Errors
+	zz000adj = zz000treat = NULL
+
+	vcols <- paste0("zz000v", seq_along(wtr))
+	tcols <- paste0("zz000tau_et", seq_along(wtr))
+
+	# Calculate v_it^* = - Z (Z_0' Z_0)^{-1} Z_1' * w_1
+	for (i in seq_along(vcols)) {
+		data[, vcols[i] := v_star[, i]]
+	}
+
+	# Equation (10) of Borusyak et. al. 2021
+	# Calculate tau_it - \bar{\tau}_{et}
+	data[,
+		 (tcols) := lapply(.SD, function(x) {
+		 	sum(x^2 * zz000adj) / sum(x^2) * zz000treat
+		 }),
+		 by = c(gname, "zz000event_time"),
+		 .SDcols = vcols
+	]
+
+	# Recenter tau by \bar{\tau}_{et}
+	data[,
+		 (tcols) := lapply(.SD, function(x) {
+		 	x[is.na(x)] = 0
+		 	zz000adj - x
+		 }),
+		 .SDcols = tcols
+	]
+
+	# Compute full covariance matrix instead of inner as in `se_inner()`
+	cov_mat_ixs <- expand.grid(seq_along(vcols), seq_along(vcols))
+
+	result <- data[,
+				   map(1:nrow(cov_mat_ixs), function(row) {
+				   	i1 <- cov_mat_ixs[row, 1]
+				   	i2 <- cov_mat_ixs[row, 2]
+				   	sum(.SD[[vcols[i1]]] * .SD[[tcols[i1]]]) * sum(.SD[[vcols[i2]]] * .SD[[tcols[i2]]])
+				   }),
+				   by = cluster_var
+	]
+
+	result <- result[,
+					 lapply(.SD, function(x) sum(x)), # no square root: variance instead of standard deviation
+					 .SDcols = paste0("V", 1:nrow(cov_mat_ixs))
+	]
+
+	cov_mat <- matrix(unlist(result), nrow = length(wtr), byrow = TRUE, dimnames = list(wtr, wtr))
+
+	data[, c(vcols, tcols) := NULL]
+
+	return(cov_mat)
 }
