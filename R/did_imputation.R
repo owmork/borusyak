@@ -201,6 +201,8 @@ did_imputation <- function(data, yname, gname, tname, idname, etname = NULL,
 	)
 	data <- data[!todrop, ]
 
+	# Count number of observations
+	numobs <- nrow(data)
 
 	# Multiply treatment weights * weights vector
 	data[, (wtr) := lapply(.SD, function(x) x * zz000weight), .SDcols = wtr]
@@ -359,7 +361,7 @@ did_imputation <- function(data, yname, gname, tname, idname, etname = NULL,
 
 	if(length(yvars) == 1) out$lhs = NULL
 
-	return(list(coeftable = out, cov = cov_mat))
+	return(list(coeftable = out, cov = cov_mat, nobs = numobs))
 }
 
 
