@@ -1,6 +1,14 @@
 
 <!-- README.md is generated from README.Rmd. Please edit that file -->
 
+# Modifications
+
+Builds on the "didimputation" package and adds:
+
+- `ettime`: easier way of implementing event studies.
+- `cov`: adds option to return covariance matrix.
+- returns number of observations.
+
 # didimputation
 
 <!-- badges: start -->
